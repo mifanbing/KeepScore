@@ -10,7 +10,7 @@ import UIKit
 class ViewController: UIViewController {
     
     // MARK: - Properties
-    var players: [String] = ["Player 1", "Player 2"] // Default players
+    var players: [String] = ["ff", "qq", "mm", "bb"] // Default players
     var scores: [[Int]] = [] // scores[round][playerIndex]
     
     // MARK: - UI Components
@@ -18,7 +18,7 @@ class ViewController: UIViewController {
         let tableView = UITableView()
         tableView.translatesAutoresizingMaskIntoConstraints = false
         tableView.separatorStyle = .singleLine
-        tableView.allowsSelection = false
+        tableView.allowsSelection = true
         return tableView
     }()
     
@@ -37,6 +37,16 @@ class ViewController: UIViewController {
         button.setTitle("Add Round", for: .normal)
         button.translatesAutoresizingMaskIntoConstraints = false
         button.backgroundColor = .systemGreen
+        button.setTitleColor(.white, for: .normal)
+        button.layer.cornerRadius = 8
+        return button
+    }()
+    
+    private let clearButton: UIButton = {
+        let button = UIButton(type: .system)
+        button.setTitle("Clear", for: .normal)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.backgroundColor = .systemRed
         button.setTitleColor(.white, for: .normal)
         button.layer.cornerRadius = 8
         return button
@@ -71,12 +81,14 @@ class ViewController: UIViewController {
         // Setup buttons
         addPlayerButton.addTarget(self, action: #selector(addPlayerTapped), for: .touchUpInside)
         addRoundButton.addTarget(self, action: #selector(addRoundTapped), for: .touchUpInside)
+        clearButton.addTarget(self, action: #selector(clearTapped), for: .touchUpInside)
         
         // Add subviews
         view.addSubview(headerStackView)
         view.addSubview(tableView)
         view.addSubview(addPlayerButton)
         view.addSubview(addRoundButton)
+        view.addSubview(clearButton)
         
         updateHeaderView()
     }
@@ -97,15 +109,21 @@ class ViewController: UIViewController {
             
             // Add Player Button
             addPlayerButton.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
-            addPlayerButton.trailingAnchor.constraint(equalTo: view.centerXAnchor, constant: -8),
             addPlayerButton.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -16),
             addPlayerButton.heightAnchor.constraint(equalToConstant: 44),
+            addPlayerButton.widthAnchor.constraint(equalTo: addRoundButton.widthAnchor),
             
             // Add Round Button
-            addRoundButton.leadingAnchor.constraint(equalTo: view.centerXAnchor, constant: 8),
-            addRoundButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            addRoundButton.leadingAnchor.constraint(equalTo: addPlayerButton.trailingAnchor, constant: 8),
             addRoundButton.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -16),
-            addRoundButton.heightAnchor.constraint(equalToConstant: 44)
+            addRoundButton.heightAnchor.constraint(equalToConstant: 44),
+            addRoundButton.widthAnchor.constraint(equalTo: clearButton.widthAnchor),
+            
+            // Clear Button
+            clearButton.leadingAnchor.constraint(equalTo: addRoundButton.trailingAnchor, constant: 8),
+            clearButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            clearButton.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -16),
+            clearButton.heightAnchor.constraint(equalToConstant: 44)
         ])
     }
     
@@ -174,25 +192,126 @@ class ViewController: UIViewController {
             return
         }
         
-        let alert = UIAlertController(title: "Add Round", message: "Enter scores for each player", preferredStyle: .alert)
+        // First, ask who won the round
+        let winnerAlert = UIAlertController(title: "Add Round", message: "Select the winner of this round", preferredStyle: .actionSheet)
         
         for (index, player) in players.enumerated() {
-            alert.addTextField { textField in
-                textField.placeholder = "\(player) score"
-                textField.keyboardType = .numberPad
+            let action = UIAlertAction(title: player, style: .default) { [weak self] _ in
+                self?.promptForCardsLeft(winnerIndex: index)
+            }
+            winnerAlert.addAction(action)
+        }
+        
+        let cancelAction = UIAlertAction(title: "Cancel", style: .cancel)
+        winnerAlert.addAction(cancelAction)
+        
+        // For iPad support
+        if let popover = winnerAlert.popoverPresentationController {
+            popover.sourceView = addRoundButton
+            popover.sourceRect = addRoundButton.bounds
+        }
+        
+        present(winnerAlert, animated: true)
+    }
+    
+    private func editRound(at roundIndex: Int) {
+        guard roundIndex < scores.count else { return }
+        
+        let roundScores = scores[roundIndex]
+        
+        // Find the winner (player with highest/positive score)
+        var winnerIndex = 0
+        var maxScore = roundScores[0]
+        for (index, score) in roundScores.enumerated() {
+            if score > maxScore {
+                maxScore = score
+                winnerIndex = index
             }
         }
         
-        let addAction = UIAlertAction(title: "Add", style: .default) { [weak self] _ in
+        // First, ask who won the round (with current winner pre-selected)
+        let winnerAlert = UIAlertController(title: "Edit Round", message: "Select the winner of this round", preferredStyle: .actionSheet)
+        
+        for (index, player) in players.enumerated() {
+            let action = UIAlertAction(title: player, style: .default) { [weak self] _ in
+                self?.promptForCardsLeft(winnerIndex: index, roundIndex: roundIndex, existingScores: roundScores)
+            }
+            if index == winnerIndex {
+                action.setValue(true, forKey: "checked")
+            }
+            winnerAlert.addAction(action)
+        }
+        
+        let cancelAction = UIAlertAction(title: "Cancel", style: .cancel)
+        winnerAlert.addAction(cancelAction)
+        
+        // For iPad support
+        if let popover = winnerAlert.popoverPresentationController {
+            if let cell = tableView.cellForRow(at: IndexPath(row: roundIndex, section: 0)) {
+                popover.sourceView = cell
+                popover.sourceRect = cell.bounds
+            }
+        }
+        
+        present(winnerAlert, animated: true)
+    }
+    
+    private func promptForCardsLeft(winnerIndex: Int, roundIndex: Int? = nil, existingScores: [Int]? = nil) {
+        let isEditing = roundIndex != nil
+        let title = isEditing ? "Edit Cards Left" : "Cards Left"
+        let message = "Enter the number of cards left for each player (winner gets sum of all losers' points)"
+        
+        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        
+        // Add text fields for each loser (all players except the winner)
+        for (index, player) in players.enumerated() {
+            if index != winnerIndex {
+                alert.addTextField { textField in
+                    textField.placeholder = "\(player) cards left"
+                    textField.keyboardType = .numberPad
+                    
+                    // Pre-fill with existing value if editing
+                    if let existingScores = existingScores {
+                        let cardsLeft = abs(existingScores[index]) // Get absolute value of negative score
+                        textField.text = "\(cardsLeft)"
+                    }
+                }
+            }
+        }
+        
+        let actionTitle = isEditing ? "Update" : "Add"
+        let addAction = UIAlertAction(title: actionTitle, style: .default) { [weak self] _ in
             guard let self = self else { return }
             
-            var roundScores: [Int] = []
-            for (index, textField) in (alert.textFields ?? []).enumerated() {
-                let score = Int(textField.text ?? "0") ?? 0
-                roundScores.append(score)
+            var roundScores: [Int] = Array(repeating: 0, count: self.players.count)
+            var totalLoserPoints = 0
+            
+            // Process losers' cards left
+            var textFieldIndex = 0
+            for (index, _) in self.players.enumerated() {
+                if index != winnerIndex {
+                    if let textField = alert.textFields?[textFieldIndex],
+                       let cardsLeftText = textField.text,
+                       let cardsLeft = Int(cardsLeftText) {
+                        // Losers get negative points equal to cards left
+                        roundScores[index] = -cardsLeft
+                        totalLoserPoints += cardsLeft
+                    }
+                    textFieldIndex += 1
+                }
             }
             
-            self.scores.append(roundScores)
+            // Winner gets the sum of all losers' points (positive)
+            roundScores[winnerIndex] = totalLoserPoints
+            
+            if let roundIndex = roundIndex {
+                // Update existing round
+                self.scores[roundIndex] = roundScores
+            } else {
+                // Add new round
+                self.scores.append(roundScores)
+            }
+            
             self.tableView.reloadData()
         }
         
@@ -201,6 +320,39 @@ class ViewController: UIViewController {
         alert.addAction(cancelAction)
         
         present(alert, animated: true)
+    }
+    
+    @objc private func clearTapped() {
+        let alert = UIAlertController(title: "Clear All Scores", message: "Are you sure you want to clear all rounds? This cannot be undone.", preferredStyle: .alert)
+        
+        let clearAction = UIAlertAction(title: "Clear", style: .destructive) { [weak self] _ in
+            guard let self = self else { return }
+            self.scores.removeAll()
+            self.tableView.reloadData()
+        }
+        
+        let cancelAction = UIAlertAction(title: "Cancel", style: .cancel)
+        alert.addAction(clearAction)
+        alert.addAction(cancelAction)
+        
+        present(alert, animated: true)
+    }
+    
+    // MARK: - Helper Methods
+    private func calculateTotals() -> [Int] {
+        guard !players.isEmpty else { return [] }
+        
+        var totals = Array(repeating: 0, count: players.count)
+        
+        for roundScores in scores {
+            for (index, score) in roundScores.enumerated() {
+                if index < totals.count {
+                    totals[index] += score
+                }
+            }
+        }
+        
+        return totals
     }
 }
 
@@ -222,6 +374,73 @@ extension ViewController: UITableViewDataSource {
 // MARK: - UITableViewDelegate
 extension ViewController: UITableViewDelegate {
     func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
+        return 60
+    }
+    
+    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        editRound(at: indexPath.row)
+    }
+    
+    func tableView(_ tableView: UITableView, viewForFooterInSection section: Int) -> UIView? {
+        let footerView = UIView()
+        footerView.backgroundColor = .systemBackground
+        
+        let totalsStackView = UIStackView()
+        totalsStackView.translatesAutoresizingMaskIntoConstraints = false
+        totalsStackView.axis = .horizontal
+        totalsStackView.distribution = .fillEqually
+        totalsStackView.spacing = 1
+        totalsStackView.backgroundColor = .systemGray4
+        
+        // Add "Total" label
+        let totalLabel = UILabel()
+        totalLabel.text = "Total"
+        totalLabel.textAlignment = .center
+        totalLabel.font = .boldSystemFont(ofSize: 16)
+        totalLabel.backgroundColor = .systemGray5
+        totalLabel.textColor = .label
+        totalLabel.translatesAutoresizingMaskIntoConstraints = false
+        totalLabel.widthAnchor.constraint(equalToConstant: 80).isActive = true
+        totalsStackView.addArrangedSubview(totalLabel)
+        
+        // Add total scores for each player
+        let totals = calculateTotals()
+        for (index, total) in totals.enumerated() {
+            let scoreLabel = UILabel()
+            scoreLabel.text = "\(total)"
+            scoreLabel.textAlignment = .center
+            scoreLabel.font = .boldSystemFont(ofSize: 16)
+            scoreLabel.backgroundColor = .systemGray5
+            scoreLabel.textColor = .label
+            totalsStackView.addArrangedSubview(scoreLabel)
+        }
+        
+        // Fill remaining columns if needed
+        while totalsStackView.arrangedSubviews.count - 1 < players.count {
+            let scoreLabel = UILabel()
+            scoreLabel.text = "0"
+            scoreLabel.textAlignment = .center
+            scoreLabel.font = .boldSystemFont(ofSize: 16)
+            scoreLabel.backgroundColor = .systemGray5
+            scoreLabel.textColor = .label
+            totalsStackView.addArrangedSubview(scoreLabel)
+        }
+        
+        footerView.addSubview(totalsStackView)
+        
+        NSLayoutConstraint.activate([
+            totalsStackView.topAnchor.constraint(equalTo: footerView.topAnchor),
+            totalsStackView.leadingAnchor.constraint(equalTo: footerView.leadingAnchor),
+            totalsStackView.trailingAnchor.constraint(equalTo: footerView.trailingAnchor),
+            totalsStackView.bottomAnchor.constraint(equalTo: footerView.bottomAnchor),
+            totalsStackView.heightAnchor.constraint(equalToConstant: 60)
+        ])
+        
+        return footerView
+    }
+    
+    func tableView(_ tableView: UITableView, heightForFooterInSection section: Int) -> CGFloat {
         return 60
     }
 }
